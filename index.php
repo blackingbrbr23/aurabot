@@ -1,88 +1,58 @@
-<?php
-<p class="text-muted">Clique em <strong>INICIAR</strong> para enviar o comando de iniciar. O cliente na sua máquina precisa ficar ouvindo a API para executar o comando.</p>
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Painel Start / Stop</title>
 
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@4.6.2/dist/css/bootstrap.min.css" rel="stylesheet">
 
-<div class="row mb-3">
-<div class="col-12 col-sm-6 mb-2">
-<button id="btnStart" class="btn btn-success btn-lg btn-block">INICIAR</button>
-</div>
-<div class="col-12 col-sm-6 mb-2">
-<button id="btnStop" class="btn btn-danger btn-lg btn-block">STOP</button>
-</div>
-</div>
+  <style>
+    body {
+      background: linear-gradient(180deg,#f8fafc,#ffffff);
+      min-height:100vh;
+    }
+    .card {
+      border-radius:1rem;
+      box-shadow:0 8px 24px rgba(0,0,0,0.08);
+    }
+  </style>
+</head>
 
+<body>
+<div class="container d-flex justify-content-center align-items-center" style="min-height:100vh;">
+  <div class="card p-4" style="max-width:600px;width:100%;">
+    <h3 class="mb-3 text-center">Painel de Controle</h3>
 
-<div class="mt-3">
-<div class="d-flex align-items-center mb-2">
-<span id="statusBullet" class="status-bullet" style="background:#ffc107"></span>
-<strong>Estado atual:</strong>
-<span id="currentStatus" class="ml-2 text-muted">carregando...</span>
-</div>
-<small class="text-muted">Última atualização: <span id="lastUpdated">--</span></small>
-</div>
+    <div class="row">
+      <div class="col-12 col-md-6 mb-2">
+        <button id="btnStart" class="btn btn-success btn-lg btn-block">INICIAR</button>
+      </div>
+      <div class="col-12 col-md-6 mb-2">
+        <button id="btnStop" class="btn btn-danger btn-lg btn-block">STOP</button>
+      </div>
+    </div>
 
-
-<hr>
-<div class="small text-muted">Dicas: para testar localmente execute um cliente que consulte <code>/api.php?action=status</code> e <code>/api.php</code> para postar comandos.</div>
+    <div class="mt-3 text-center">
+      <strong>Status:</strong> <span id="status">aguardando...</span>
+    </div>
+  </div>
 </div>
-</div>
-</div>
-
 
 <script>
-const btnStart = document.getElementById('btnStart');
-const btnStop = document.getElementById('btnStop');
-const currentStatus = document.getElementById('currentStatus');
-const statusBullet = document.getElementById('statusBullet');
-const lastUpdated = document.getElementById('lastUpdated');
-
-
-async function postCommand(cmd){
-try{
-const res = await fetch('api.php',{
-method:'POST',
-headers:{'Content-Type':'application/json'},
-body: JSON.stringify({ command: cmd })
-});
-const j = await res.json();
-updateUI(j);
-}catch(err){
-console.error(err);
-currentStatus.textContent = 'erro ao enviar';
-statusBullet.style.background = '#6c757d';
-}
+async function send(cmd){
+  const r = await fetch("api.php",{
+    method:"POST",
+    headers:{ "Content-Type":"application/json" },
+    body: JSON.stringify({command:cmd})
+  });
+  const j = await r.json();
+  document.getElementById("status").innerText = j.command;
 }
 
-
-async function fetchStatus(){
-try{
-const res = await fetch('api.php?action=status');
-const j = await res.json();
-updateUI(j);
-}catch(err){
-console.error(err);
-currentStatus.textContent = 'offline';
-statusBullet.style.background = '#6c757d';
-}
-}
-
-
-function updateUI({ command, updated_at }){
-currentStatus.textContent = command || 'nenhum';
-lastUpdated.textContent = updated_at || '--';
-if(command === 'start') statusBullet.style.background = '#28a745';
-else if(command === 'stop') statusBullet.style.background = '#dc3545';
-else statusBullet.style.background = '#ffc107';
-}
-
-
-btnStart.addEventListener('click', ()=> postCommand('start'));
-btnStop.addEventListener('click', ()=> postCommand('stop'));
-
-
-// polling UI status a cada 3s para manter painel atualizado
-fetchStatus();
-setInterval(fetchStatus, 3000);
+document.getElementById("btnStart").onclick = ()=>send("start");
+document.getElementById("btnStop").onclick  = ()=>send("stop");
 </script>
+
 </body>
 </html>
