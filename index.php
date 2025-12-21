@@ -44,30 +44,22 @@
     }
 
     .logo {
-      width:48px;
-      height:48px;
-      border-radius:10px;
+      width:56px;
+      height:56px;
+      border-radius:12px;
       display:inline-flex;
       align-items:center;
       justify-content:center;
-      font-weight:700;
-      background: linear-gradient(135deg, var(--accent), #3ec7ff);
-      color:#081223;
-      box-shadow: 0 6px 18px rgba(124,92,255,0.18), inset 0 -6px 18px rgba(0,0,0,0.15);
-      font-family: Inter, Arial, sans-serif;
+      background: linear-gradient(135deg, rgba(124,92,255,0.95), rgba(62,199,255,0.95));
+      box-shadow: 0 8px 22px rgba(124,92,255,0.14), inset 0 -6px 18px rgba(0,0,0,0.12);
     }
 
+    /* small decorative spiral inside logo using SVG */
     .title {
-      font-size:1.25rem;
-      font-weight:700;
-      letter-spacing:0.2px;
+      font-size:1.5rem;
+      font-weight:800;
+      letter-spacing:0.4px;
       margin:0;
-    }
-
-    .subtitle {
-      margin:0;
-      color:var(--muted);
-      font-size:0.85rem;
     }
 
     .btn-lg {
@@ -100,7 +92,6 @@
     .chip-stop  { background: rgba(239,68,68,0.08); color: #fb7185; border: 1px solid rgba(239,68,68,0.08); }
     .chip-wait  { background: rgba(255,255,255,0.02); color: var(--muted); border: 1px solid rgba(255,255,255,0.02); }
 
-    .small-muted { color:var(--muted); font-size:0.85rem; margin-top:6px; text-align:center; }
     @media (max-width:480px){
       .card{padding:18px;}
     }
@@ -110,11 +101,18 @@
 <body>
   <div class="container d-flex justify-content-center align-items-center" style="min-height:100vh;">
     <div class="card p-4" style="max-width:640px; width:100%;">
-      <div class="brand mb-2">
-        <div class="logo">AB</div>
+      <div class="brand mb-3">
+        <div class="logo" aria-hidden="true">
+          <!-- small svg decorative swirl (no letters) -->
+          <svg width="36" height="36" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+            <path d="M12 2C13.1046 2 14 2.89543 14 4C14 5.10457 13.1046 6 12 6C10.8954 6 10 5.10457 10 4C10 3.44772 10.4477 3 11 3" stroke="white" stroke-opacity="0.92" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>
+            <path d="M4 12C4 8.68629 6.68629 6 10 6H14" stroke="white" stroke-opacity="0.85" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>
+            <path d="M20 12C20 15.3137 17.3137 18 14 18H10" stroke="white" stroke-opacity="0.7" stroke-width="1.1" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </div>
+
         <div>
           <p class="title">AuraBot</p>
-          <p class="subtitle">Painel — Start / Stop</p>
         </div>
       </div>
 
@@ -131,16 +129,12 @@
         <strong style="opacity:0.9;">Status:</strong>
         <div id="status" style="margin-left:6px;">aguardando...</div>
       </div>
-
-      <div class="small-muted">
-        A ação do último clique é salva neste navegador e será restaurada sempre que você voltar — mesmo após fechar o site.
-      </div>
     </div>
   </div>
 
 <script>
 /*
-  Lógica:
+  Lógica preservada:
   - Cada navegador gera um clientId salvo em localStorage ("AuraBotClientId").
   - Última ação salva em localStorage ("AuraBotLastAction") com {command,timestamp}.
   - Enviamos POST para api.php com {clientId, command} toda vez que o usuário clicar.
@@ -148,9 +142,7 @@
 */
 
 function uuidv4(){
-  // gera UUID simples usando crypto API
   if (crypto && crypto.randomUUID) return crypto.randomUUID();
-  // fallback
   return 'xxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c){
     const r = Math.random()*16|0, v = c=='x' ? r : (r&0x3|0x8);
     return v.toString(16);
@@ -186,7 +178,6 @@ function setUI(command){
   const btnStart = document.getElementById("btnStart");
   const btnStop  = document.getElementById("btnStop");
 
-  // reset
   btnStart.classList.remove("active");
   btnStop.classList.remove("active");
 
@@ -236,43 +227,33 @@ async function fetchServerAction(clientId){
 async function send(cmd){
   const clientId = getClientId();
 
-  // Atualiza imediatamente na UI e localStorage
   setUI(cmd);
   saveLocalAction(cmd);
 
-  // Envia ao servidor (async)
   const resp = await sendCommandToServer(clientId, cmd);
-  // opcional: se servidor devolver algo diferente podíamos atualizar, mas
-  // por enquanto localStorage é a fonte de verdade para este navegador.
   if(resp && resp.success){
-    // sucesso
-    //console.log("Servidor salvou:", resp);
+    // servidor confirmou
   } else {
-    //console.log("Servidor não confirmou persistência.");
+    // sem confirmação do servidor (continua salvo localmente)
   }
 }
 
-// inicialização da página
 (async function init(){
   const clientId = getClientId();
 
-  // 1) Se houver ação local, usa ela.
   const local = readLocalAction();
   if(local && local.command){
     setUI(local.command);
   } else {
-    // 2) Senão, tenta buscar no servidor
     const server = await fetchServerAction(clientId);
     if(server && server.command){
       setUI(server.command);
-      // salvar local para futuro
       saveLocalAction(server.command);
     } else {
       setUI(null);
     }
   }
 
-  // eventos
   document.getElementById("btnStart").onclick = ()=> send("start");
   document.getElementById("btnStop").onclick  = ()=> send("stop");
 })();
