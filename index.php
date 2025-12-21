@@ -9,10 +9,12 @@
 
   <style>
     :root{
-      --bg-1: #0f1724;
-      --bg-2: #0b1220;
-      --card: #0b1228;
-      --accent: #7c5cff;
+      --bg-1: #07101a;
+      --bg-2: #0b1420;
+      --card: #081421;
+      --accent-a: #7c5cff;   /* purple */
+      --accent-b: #3ec7ff;   /* aqua */
+      --accent-c: #ffd166;   /* warm gold for tiny highlight */
       --muted: #9aa6b2;
       --glass: rgba(255,255,255,0.03);
     }
@@ -21,7 +23,7 @@
     body {
       background: linear-gradient(180deg,var(--bg-1),var(--bg-2));
       color: #e6eef6;
-      font-family: -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial;
+      font-family: "Inter", -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial;
       min-height:100vh;
       display:flex;
       align-items:center;
@@ -33,102 +35,112 @@
       background: linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0.01));
       border: 1px solid rgba(255,255,255,0.04);
       border-radius:1rem;
-      box-shadow: 0 10px 30px rgba(2,6,23,0.6);
+      box-shadow: 0 12px 36px rgba(2,6,23,0.6);
+      padding:28px;
+      width:100%;
+      max-width:720px;
     }
 
+    /* Header / brand */
     .brand {
       display:flex;
       align-items:center;
-      gap:12px;
+      gap:18px;
       justify-content:center;
+      margin-bottom:18px;
+      flex-direction:column;
     }
 
-    .logo {
-      width:56px;
-      height:56px;
-      border-radius:12px;
-      display:inline-flex;
-      align-items:center;
-      justify-content:center;
-      background: linear-gradient(135deg, rgba(124,92,255,0.95), rgba(62,199,255,0.95));
-      box-shadow: 0 8px 22px rgba(124,92,255,0.14), inset 0 -6px 18px rgba(0,0,0,0.12);
-    }
-
-    /* small decorative spiral inside logo using SVG */
+    /* Big, professional title */
     .title {
-      font-size:1.5rem;
-      font-weight:800;
-      letter-spacing:0.4px;
       margin:0;
+      font-weight:900;
+      letter-spacing: -1px;
+      line-height:0.95;
+      font-family: "GT America", "Inter", "Helvetica Neue", Arial, sans-serif;
+      font-size:48px; /* desktop */
+      text-align:center;
+      /* gradient text */
+      background: linear-gradient(90deg, var(--accent-a), var(--accent-b));
+      -webkit-background-clip: text;
+      background-clip: text;
+      -webkit-text-fill-color: transparent;
+      color: transparent;
+      text-shadow: 0 6px 24px rgba(124,92,255,0.12), 0 2px 6px rgba(0,0,0,0.6);
+      display:inline-block;
+      padding:4px 8px;
+      border-radius:10px;
     }
 
+    /* subtle subline (removed earlier, kept hidden for future) */
+    .subtitle {
+      margin:0;
+      color:var(--muted);
+      font-size:0.95rem;
+    }
+
+    /* Buttons */
     .btn-lg {
       border-radius: 12px;
-      padding: 0.9rem 1rem;
-      font-weight:700;
-      letter-spacing:0.4px;
+      padding: 0.95rem 1.15rem;
+      font-weight:800;
+      letter-spacing:0.6px;
     }
+
+    .row-buttons { margin-top:10px; }
 
     .status-box{
       background: var(--glass);
       border-radius:10px;
       padding:14px;
-      margin-top:12px;
+      margin-top:18px;
       display:flex;
       align-items:center;
       justify-content:center;
-      gap:10px;
-      border:1px solid rgba(255,255,255,0.02);
+      gap:12px;
+      border:1px solid rgba(255,255,255,0.03);
     }
 
     .chip {
-      padding:6px 10px;
+      padding:7px 12px;
       border-radius:999px;
-      font-weight:700;
-      font-size:0.9rem;
+      font-weight:800;
+      font-size:0.95rem;
     }
 
-    .chip-start { background: rgba(37, 211, 102, 0.12); color: #22c55e; border: 1px solid rgba(34,197,94,0.12); }
+    .chip-start { background: rgba(37, 211, 102, 0.12); color: #22c55e; border: 1px solid rgba(34,197,94,0.08); }
     .chip-stop  { background: rgba(239,68,68,0.08); color: #fb7185; border: 1px solid rgba(239,68,68,0.08); }
     .chip-wait  { background: rgba(255,255,255,0.02); color: var(--muted); border: 1px solid rgba(255,255,255,0.02); }
 
-    @media (max-width:480px){
-      .card{padding:18px;}
+    /* responsive adjustments */
+    @media (max-width:900px){
+      .title { font-size:40px; }
+    }
+    @media (max-width:600px){
+      .title { font-size:34px; }
+      .row-buttons .col-12 { margin-bottom:10px; }
     }
   </style>
 </head>
 
 <body>
-  <div class="container d-flex justify-content-center align-items-center" style="min-height:100vh;">
-    <div class="card p-4" style="max-width:640px; width:100%;">
-      <div class="brand mb-3">
-        <div class="logo" aria-hidden="true">
-          <!-- small svg decorative swirl (no letters) -->
-          <svg width="36" height="36" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-            <path d="M12 2C13.1046 2 14 2.89543 14 4C14 5.10457 13.1046 6 12 6C10.8954 6 10 5.10457 10 4C10 3.44772 10.4477 3 11 3" stroke="white" stroke-opacity="0.92" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>
-            <path d="M4 12C4 8.68629 6.68629 6 10 6H14" stroke="white" stroke-opacity="0.85" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>
-            <path d="M20 12C20 15.3137 17.3137 18 14 18H10" stroke="white" stroke-opacity="0.7" stroke-width="1.1" stroke-linecap="round" stroke-linejoin="round"/>
-          </svg>
-        </div>
+  <div class="card">
+    <div class="brand">
+      <h1 class="title">AuraBot</h1>
+    </div>
 
-        <div>
-          <p class="title">AuraBot</p>
-        </div>
+    <div class="row row-buttons">
+      <div class="col-12 col-md-6 mb-2">
+        <button id="btnStart" class="btn btn-success btn-lg btn-block">INICIAR</button>
       </div>
+      <div class="col-12 col-md-6 mb-2">
+        <button id="btnStop" class="btn btn-danger btn-lg btn-block">STOP</button>
+      </div>
+    </div>
 
-      <div class="row">
-        <div class="col-12 col-md-6 mb-2">
-          <button id="btnStart" class="btn btn-success btn-lg btn-block">INICIAR</button>
-        </div>
-        <div class="col-12 col-md-6 mb-2">
-          <button id="btnStop" class="btn btn-danger btn-lg btn-block">STOP</button>
-        </div>
-      </div>
-
-      <div class="status-box mt-3">
-        <strong style="opacity:0.9;">Status:</strong>
-        <div id="status" style="margin-left:6px;">aguardando...</div>
-      </div>
+    <div class="status-box mt-3">
+      <strong style="opacity:0.92;">Status:</strong>
+      <div id="status" style="margin-left:8px;">aguardando...</div>
     </div>
   </div>
 
@@ -232,7 +244,7 @@ async function send(cmd){
 
   const resp = await sendCommandToServer(clientId, cmd);
   if(resp && resp.success){
-    // servidor confirmou
+    // servidor confirmou — nada extra necessário
   } else {
     // sem confirmação do servidor (continua salvo localmente)
   }
