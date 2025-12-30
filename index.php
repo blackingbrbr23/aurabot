@@ -1,15 +1,13 @@
 <?php
-// index.php - login e painel AuraBot (autônomo) atualizado
+// index.php - login e painel AuraBot (atualizado com client_id persistente)
 // - usa data/users.db (cria se necessário)
 // - persiste last_command/last_timestamp no DB por usuário
-// - endpoints internos:
-//    GET  index.php?action=get_status   -> { success:true, command:'start'|'stop'|null, timestamp:... }
-//    POST index.php?action=send_command -> { success:true, command:..., timestamp:... }
-//  Observação: mantenho compatibilidade com api.php (se existir) — o cliente também enviará para api.php com clientId.
+// - gera client_id ao primeiro login caso ainda não exista
+// - exibe client_id no lado direito (permanente até admin remover)
 
+/* --- sessão e DB --- */
 session_start();
 
-/* --- Config / DB bootstrap --- */
 $DATA_DIR = __DIR__ . DIRECTORY_SEPARATOR . "data";
 if (!is_dir($DATA_DIR)) {
     @mkdir($DATA_DIR, 0755, true);
@@ -25,7 +23,7 @@ try {
     exit;
 }
 
-/* --- Cria tabela se não existir (com colunas de status) --- */
+/* --- Cria tabela se não existir e garante client_id coluna --- */
 $pdo->exec("CREATE TABLE IF NOT EXISTS users (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     username TEXT NOT NULL UNIQUE,
@@ -35,23 +33,31 @@ $pdo->exec("CREATE TABLE IF NOT EXISTS users (
     last_command TEXT DEFAULT NULL,
     last_timestamp INTEGER DEFAULT NULL
 )");
+$cols = $pdo->query("PRAGMA table_info(users)")->fetchAll(PDO::FETCH_ASSOC);
+$has_client_id = false;
+foreach ($cols as $c) { if (isset($c['name']) && $c['name'] === 'client_id') { $has_client_id = true; break; } }
+if (!$has_client_id) {
+    $pdo->exec("ALTER TABLE users ADD COLUMN client_id TEXT");
+}
+
+/* --- Garante admin padrão --- */
 $stmt = $pdo->prepare("SELECT COUNT(*) FROM users WHERE username = :u");
 $stmt->execute([':u' => 'admin']);
 if ((int)$stmt->fetchColumn() === 0) {
     $hash = password_hash('blackingbr', PASSWORD_DEFAULT);
-    $stmt = $pdo->prepare("INSERT INTO users (username, password, is_admin, created_at) VALUES (:u, :p, 1, :t)");
-    $stmt->execute([':u' => 'admin', ':p' => $hash, ':t' => time()]);
+    $stmt = $pdo->prepare("INSERT INTO users (username, password, is_admin, created_at, client_id) VALUES (:u, :p, 1, :t, :cid)");
+    $stmt->execute([':u' => 'admin', ':p' => $hash, ':t' => time(), ':cid' => bin2hex(random_bytes(8))]);
 }
 
 /* --- Helpers --- */
 function e($s){ return htmlspecialchars($s ?? '', ENT_QUOTES, 'UTF-8'); }
 function find_user_by_username($pdo, $username) {
-    $stmt = $pdo->prepare("SELECT id, username, password, is_admin, created_at, last_command, last_timestamp FROM users WHERE username = :u LIMIT 1");
+    $stmt = $pdo->prepare("SELECT id, username, password, is_admin, created_at, last_command, last_timestamp, client_id FROM users WHERE username = :u LIMIT 1");
     $stmt->execute([':u' => $username]);
     return $stmt->fetch(PDO::FETCH_ASSOC) ?: null;
 }
 function find_user_by_id($pdo, $id) {
-    $stmt = $pdo->prepare("SELECT id, username, password, is_admin, created_at, last_command, last_timestamp FROM users WHERE id = :id LIMIT 1");
+    $stmt = $pdo->prepare("SELECT id, username, password, is_admin, created_at, last_command, last_timestamp, client_id FROM users WHERE id = :id LIMIT 1");
     $stmt->execute([':id' => $id]);
     return $stmt->fetch(PDO::FETCH_ASSOC) ?: null;
 }
@@ -67,6 +73,15 @@ function verify_credentials($pdo, $username, $password) {
         return $user;
     }
     return false;
+}
+function generate_unique_client_id($pdo) {
+    for ($i=0;$i<10;$i++){
+        $cid = bin2hex(random_bytes(8));
+        $stmt = $pdo->prepare("SELECT COUNT(*) FROM users WHERE client_id = :cid");
+        $stmt->execute([':cid'=>$cid]);
+        if ((int)$stmt->fetchColumn() === 0) return $cid;
+    }
+    return uniqid('cid_', true);
 }
 
 /* --- Endpoints AJAX (somente para usuários logados) --- */
@@ -135,12 +150,31 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     } else {
         $user = verify_credentials($pdo, $username, $password);
         if ($user) {
+            // se não tiver client_id, gera e salva (persistente)
+            if (empty($user['client_id'])) {
+                $cid = generate_unique_client_id($pdo);
+                $stmt = $pdo->prepare("UPDATE users SET client_id = :cid WHERE id = :id");
+                $stmt->execute([':cid'=>$cid, ':id'=>$user['id']]);
+                // atualizar variável $user
+                $user['client_id'] = $cid;
+            }
             $_SESSION['user_id'] = $user['id'];
             header('Location: index.php');
             exit;
         } else {
             $errors[] = 'Usuário ou senha incorretos.';
         }
+    }
+}
+
+/* --- caso usuário já logado, garantir que client_id exista e esteja atualizado na $currentUser --- */
+if (!empty($_SESSION['user_id'])) {
+    $currentUser = find_user_by_id($pdo, $_SESSION['user_id']);
+    if ($currentUser && empty($currentUser['client_id'])) {
+        $cid = generate_unique_client_id($pdo);
+        $stmt = $pdo->prepare("UPDATE users SET client_id = :cid WHERE id = :id");
+        $stmt->execute([':cid'=>$cid, ':id'=>$currentUser['id']]);
+        $currentUser['client_id'] = $cid;
     }
 }
 
@@ -203,10 +237,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     .muted { color: var(--muted); font-size:0.9rem; text-align:center; margin-top:8px; }
     .user-bar { display:flex; justify-content:space-between; align-items:center; gap:12px; margin-bottom:12px; }
     .chip { padding:6px 10px; border-radius:999px; background: rgba(255,255,255,0.03); border:1px solid rgba(255,255,255,0.02); }
+    .cid-chip { font-family:monospace; background:rgba(255,255,255,0.02); padding:6px 10px; border-radius:8px; color:#e6eef6; margin-left:8px; }
     .row-buttons { margin-top:10px; }
     .chip-start { background: rgba(37, 211, 102, 0.12); color: #22c55e; border: 1px solid rgba(34,197,94,0.08); padding:7px 12px;border-radius:999px;}
     .chip-stop  { background: rgba(239,68,68,0.08); color: #fb7185; border: 1px solid rgba(239,68,68,0.08); padding:7px 12px;border-radius:999px;}
     .chip-wait  { background: rgba(255,255,255,0.02); color: var(--muted); border: 1px solid rgba(255,255,255,0.02); padding:7px 12px;border-radius:999px;}
+    .copy-btn { background:transparent; border:0; color:#9aa6b2; cursor:pointer; margin-left:6px; }
   </style>
 </head>
 <body>
@@ -237,13 +273,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             <button class="btn btn-primary btn-block">Entrar</button>
           </div>
           <div class="col-12 col-md-6">
-            <!-- removido o link direto para dados.php conforme solicitado -->
-            <button type="button" class="btn btn-outline-light btn-block" onclick="alert('Se você é admin, abra a página de admin diretamente.');">Ajuda</button>
+            <!-- botão de ajuda removido conforme solicitado -->
+            <button type="button" class="btn btn-outline-light btn-block" onclick="void(0);"> </button>
           </div>
         </div>
       </form>
-
-      <p class="muted">Se você é administrador, abra a página de administração separadamente.</p>
 
     <?php else: 
       // Usuário autenticado — mostra a interface AuraBot (painel)
@@ -252,8 +286,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         <div>
           <strong>Conectado como:</strong> <span class="chip"><?php echo e($currentUser['username']); ?></span>
         </div>
-        <div>
-          <a href="index.php?logout=1" class="btn btn-sm btn-outline-light">Sair</a>
+        <div style="display:flex; align-items:center;">
+          <?php if (!empty($currentUser['client_id'])): ?>
+            <span class="cid-chip" id="clientIdDisplay"><?php echo e($currentUser['client_id']); ?></span>
+            <button class="copy-btn" onclick="copyClientId()" title="Copiar client ID">📋</button>
+          <?php endif; ?>
+          <a href="index.php?logout=1" class="btn btn-sm btn-outline-light" style="margin-left:8px;">Sair</a>
         </div>
       </div>
 
@@ -276,6 +314,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
       </div>
 
       <script>
+      // copia client id para clipboard
+      function copyClientId(){
+        var el = document.getElementById('clientIdDisplay');
+        if(!el) return;
+        var text = el.textContent || el.innerText;
+        if(!navigator.clipboard) { alert('Seu navegador não suporta copiar por script.'); return; }
+        navigator.clipboard.writeText(text).then(function(){ alert('Client ID copiado'); }, function(){ alert('Falha ao copiar'); });
+      }
+
       // Gera clientId local (mantido para compatibilidade com api.php)
       function uuidv4(){
         if (crypto && crypto.randomUUID) return crypto.randomUUID();
