@@ -1,6 +1,11 @@
 <?php
-// index.php - login e painel AuraBot (autônomo)
-// Usa o mesmo banco data/users.db criado por dados.php.
+// index.php - login e painel AuraBot (autônomo) atualizado
+// - usa data/users.db (cria se necessário)
+// - persiste last_command/last_timestamp no DB por usuário
+// - endpoints internos:
+//    GET  index.php?action=get_status   -> { success:true, command:'start'|'stop'|null, timestamp:... }
+//    POST index.php?action=send_command -> { success:true, command:..., timestamp:... }
+//  Observação: mantenho compatibilidade com api.php (se existir) — o cliente também enviará para api.php com clientId.
 
 session_start();
 
@@ -20,13 +25,15 @@ try {
     exit;
 }
 
-// Cria tabela se não existir e garante admin (caso dados.php não tenha sido usado ainda)
+/* --- Cria tabela se não existir (com colunas de status) --- */
 $pdo->exec("CREATE TABLE IF NOT EXISTS users (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     username TEXT NOT NULL UNIQUE,
     password TEXT NOT NULL,
     is_admin INTEGER NOT NULL DEFAULT 0,
-    created_at INTEGER NOT NULL
+    created_at INTEGER NOT NULL,
+    last_command TEXT DEFAULT NULL,
+    last_timestamp INTEGER DEFAULT NULL
 )");
 $stmt = $pdo->prepare("SELECT COUNT(*) FROM users WHERE username = :u");
 $stmt->execute([':u' => 'admin']);
@@ -36,15 +43,15 @@ if ((int)$stmt->fetchColumn() === 0) {
     $stmt->execute([':u' => 'admin', ':p' => $hash, ':t' => time()]);
 }
 
-/* --- Funções --- */
+/* --- Helpers --- */
 function e($s){ return htmlspecialchars($s ?? '', ENT_QUOTES, 'UTF-8'); }
 function find_user_by_username($pdo, $username) {
-    $stmt = $pdo->prepare("SELECT id, username, password, is_admin, created_at FROM users WHERE username = :u LIMIT 1");
+    $stmt = $pdo->prepare("SELECT id, username, password, is_admin, created_at, last_command, last_timestamp FROM users WHERE username = :u LIMIT 1");
     $stmt->execute([':u' => $username]);
     return $stmt->fetch(PDO::FETCH_ASSOC) ?: null;
 }
 function find_user_by_id($pdo, $id) {
-    $stmt = $pdo->prepare("SELECT id, username, password, is_admin, created_at FROM users WHERE id = :id LIMIT 1");
+    $stmt = $pdo->prepare("SELECT id, username, password, is_admin, created_at, last_command, last_timestamp FROM users WHERE id = :id LIMIT 1");
     $stmt->execute([':id' => $id]);
     return $stmt->fetch(PDO::FETCH_ASSOC) ?: null;
 }
@@ -60,6 +67,50 @@ function verify_credentials($pdo, $username, $password) {
         return $user;
     }
     return false;
+}
+
+/* --- Endpoints AJAX (somente para usuários logados) --- */
+if (isset($_GET['action']) && $_GET['action'] === 'get_status') {
+    header('Content-Type: application/json; charset=UTF-8');
+    if (empty($_SESSION['user_id'])) {
+        echo json_encode(['success'=>false,'error'=>'não autenticado'], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+    $user = find_user_by_id($pdo, $_SESSION['user_id']);
+    if (!$user) {
+        echo json_encode(['success'=>false,'error'=>'usuário não encontrado'], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+    echo json_encode([
+        'success' => true,
+        'command' => $user['last_command'] ?? null,
+        'timestamp'=> $user['last_timestamp'] ? (int)$user['last_timestamp'] : null
+    ], JSON_UNESCAPED_UNICODE);
+    exit;
+}
+
+if (isset($_GET['action']) && $_GET['action'] === 'send_command' && $_SERVER['REQUEST_METHOD'] === 'POST') {
+    header('Content-Type: application/json; charset=UTF-8');
+    if (empty($_SESSION['user_id'])) {
+        echo json_encode(['success'=>false,'error'=>'não autenticado'], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+    $body = file_get_contents('php://input');
+    $json = @json_decode($body, true);
+    if (!is_array($json) || !isset($json['command'])) {
+        echo json_encode(['success'=>false,'error'=>'payload inválido'], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+    $command = strtolower(trim($json['command']));
+    if (!in_array($command, ['start','stop'], true)) {
+        echo json_encode(['success'=>false,'error'=>'command inválido (start|stop)'], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+    $ts = time();
+    $stmt = $pdo->prepare("UPDATE users SET last_command = :cmd, last_timestamp = :ts WHERE id = :id");
+    $stmt->execute([':cmd' => $command, ':ts' => $ts, ':id' => $_SESSION['user_id']]);
+    echo json_encode(['success'=>true,'command'=>$command,'timestamp'=>$ts], JSON_UNESCAPED_UNICODE);
+    exit;
 }
 
 /* --- Logout via ?logout=1 --- */
@@ -186,15 +237,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             <button class="btn btn-primary btn-block">Entrar</button>
           </div>
           <div class="col-12 col-md-6">
-            <a href="dados.php" class="btn btn-outline-light btn-block">Painel Admin</a>
+            <!-- removido o link direto para dados.php conforme solicitado -->
+            <button type="button" class="btn btn-outline-light btn-block" onclick="alert('Se você é admin, abra a página de admin diretamente.');">Ajuda</button>
           </div>
         </div>
       </form>
 
-      <p class="muted">Se você é administrador, use o painel admin para gerenciar clientes.</p>
+      <p class="muted">Se você é administrador, abra a página de administração separadamente.</p>
 
     <?php else: 
-      // Usuário autenticado — mostra a interface AuraBot (seu HTML original adaptado)
+      // Usuário autenticado — mostra a interface AuraBot (painel)
     ?>
       <div class="user-bar">
         <div>
@@ -202,9 +254,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         </div>
         <div>
           <a href="index.php?logout=1" class="btn btn-sm btn-outline-light">Sair</a>
-          <?php if ((int)$currentUser['is_admin'] === 1): ?>
-            <a href="dados.php" class="btn btn-sm btn-info">Admin</a>
-          <?php endif; ?>
         </div>
       </div>
 
@@ -227,6 +276,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
       </div>
 
       <script>
+      // Gera clientId local (mantido para compatibilidade com api.php)
       function uuidv4(){
         if (crypto && crypto.randomUUID) return crypto.randomUUID();
         return 'xxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c){
@@ -236,7 +286,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
       }
       const STORAGE_KEY_ID = "AuraBotClientId";
       const STORAGE_KEY_ACTION = "AuraBotLastAction";
-      const API_URL = "api.php";
+      const API_URL = "api.php"; // seu endpoint original (opcional)
 
       function getClientId(){
         let id = localStorage.getItem(STORAGE_KEY_ID);
@@ -246,15 +296,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         }
         return id;
       }
-      function saveLocalAction(command){
-        const payload = { command: command, timestamp: Date.now() };
-        localStorage.setItem(STORAGE_KEY_ACTION, JSON.stringify(payload));
-      }
-      function readLocalAction(){
-        const raw = localStorage.getItem(STORAGE_KEY_ACTION);
-        if(!raw) return null;
-        try { return JSON.parse(raw); } catch(e){ return null; }
-      }
+
       function setUI(command){
         const statusEl = document.getElementById("status");
         const btnStart = document.getElementById("btnStart");
@@ -274,66 +316,77 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         }
       }
 
-      async function sendCommandToServer(clientId, command){
-        try{
-          const r = await fetch(API_URL, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ clientId: clientId, command: command })
+      // envia comando ao servidor (por usuário) — endpoint interno index.php?action=send_command
+      async function updateServerCommand(command){
+        try {
+          const r = await fetch('index.php?action=send_command', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ command: command })
           });
-          if(!r.ok) {
-            console.warn("Erro ao enviar para servidor:", r.status);
-            return null;
-          }
+          if(!r.ok) return null;
           const j = await r.json();
           return j;
         } catch(e){
-          console.warn("Falha na conexão com api.php:", e);
+          console.warn('Falha ao atualizar status no servidor:', e);
           return null;
         }
       }
 
-      async function fetchServerAction(clientId){
+      // busca status do servidor (por usuário)
+      async function fetchServerStatus(){
         try {
-          const r = await fetch(API_URL + "?clientId=" + encodeURIComponent(clientId), { method: "GET" });
+          const r = await fetch('index.php?action=get_status', { method: 'GET' });
           if(!r.ok) return null;
           const j = await r.json();
-          if(j && j.command) return j;
+          if(j && j.success) return j;
           return null;
         } catch(e){
-          console.warn("Erro ao buscar ação no servidor:", e);
+          console.warn('Falha ao obter status do servidor:', e);
           return null;
+        }
+      }
+
+      // envia também para api.php (se quiser manter o armazenamento por clientId)
+      async function sendToApiPhp(clientId, command){
+        try {
+          await fetch(API_URL, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ clientId: clientId, command: command })
+          });
+        } catch(e){
+          // não crítico
         }
       }
 
       async function send(cmd){
         const clientId = getClientId();
 
-        setUI(cmd);
-        saveLocalAction(cmd);
-
-        const resp = await sendCommandToServer(clientId, cmd);
-        if(resp && resp.success){
-          // servidor confirmou
+        // atualiza servidor (persistência por usuário) — principal
+        const srv = await updateServerCommand(cmd);
+        if (srv && srv.success) {
+          // atualizou com sucesso no servidor
+          setUI(cmd);
         } else {
-          // sem confirmação do servidor (continua salvo localmente)
+          // se falhar, ao menos atualiza a UI localmente
+          setUI(cmd);
         }
+
+        // atualiza também a API por clientId (compatibilidade)
+        sendToApiPhp(clientId, cmd);
+
+        // salva localmente (opcional)
+        localStorage.setItem(STORAGE_KEY_ACTION, JSON.stringify({ command: cmd, timestamp: Date.now() }));
       }
 
       (async function init(){
-        const clientId = getClientId();
-
-        const local = readLocalAction();
-        if(local && local.command){
-          setUI(local.command);
+        // tenta obter o status do servidor para este usuário
+        const server = await fetchServerStatus();
+        if (server && server.command) {
+          setUI(server.command);
         } else {
-          const server = await fetchServerAction(clientId);
-          if(server && server.command){
-            setUI(server.command);
-            saveLocalAction(server.command);
-          } else {
-            setUI(null);
-          }
+          setUI(null);
         }
 
         document.getElementById("btnStart").onclick = ()=> send("start");
