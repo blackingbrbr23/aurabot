@@ -1,10 +1,9 @@
 <?php
-// dados.php - painel admin (autônomo)
-// Regras:
-// - Cria data/ e data/users.db automaticamente.
-// - Admin padrão: usuário=admin senha=blackingbr
-// - Permite criar e remover clientes (usuários não-admin).
-// - Somente admin pode acessar o CRUD.
+// dados.php - painel admin (autônomo) atualizado
+// - cria data/ e data/users.db automaticamente
+// - admin padrão: admin / blackingbr
+// - permite criar/remover clientes (usuários não-admin)
+// - ao criar usuário, mostra um "olho" para revelar a senha criada (apenas imediatamente)
 
 session_start();
 
@@ -24,16 +23,18 @@ try {
     exit;
 }
 
-// Cria tabela users se necessário
+/* --- Criar tabela users com colunas de status --- */
 $pdo->exec("CREATE TABLE IF NOT EXISTS users (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     username TEXT NOT NULL UNIQUE,
     password TEXT NOT NULL,
     is_admin INTEGER NOT NULL DEFAULT 0,
-    created_at INTEGER NOT NULL
+    created_at INTEGER NOT NULL,
+    last_command TEXT DEFAULT NULL,
+    last_timestamp INTEGER DEFAULT NULL
 )");
 
-// Garante admin padrão
+/* --- Garante admin padrão --- */
 $stmt = $pdo->prepare("SELECT COUNT(*) FROM users WHERE username = :u");
 $stmt->execute([':u' => 'admin']);
 if ((int)$stmt->fetchColumn() === 0) {
@@ -42,16 +43,15 @@ if ((int)$stmt->fetchColumn() === 0) {
     $stmt->execute([':u' => 'admin', ':p' => $hash, ':t' => time()]);
 }
 
-/* --- Funções auxiliares --- */
+/* --- Helpers --- */
 function e($s){ return htmlspecialchars($s ?? '', ENT_QUOTES, 'UTF-8'); }
-
 function find_user_by_username($pdo, $username) {
-    $stmt = $pdo->prepare("SELECT id, username, password, is_admin, created_at FROM users WHERE username = :u LIMIT 1");
+    $stmt = $pdo->prepare("SELECT id, username, password, is_admin, created_at, last_command, last_timestamp FROM users WHERE username = :u LIMIT 1");
     $stmt->execute([':u' => $username]);
     return $stmt->fetch(PDO::FETCH_ASSOC) ?: null;
 }
 function find_user_by_id($pdo, $id) {
-    $stmt = $pdo->prepare("SELECT id, username, password, is_admin, created_at FROM users WHERE id = :id LIMIT 1");
+    $stmt = $pdo->prepare("SELECT id, username, password, is_admin, created_at, last_command, last_timestamp FROM users WHERE id = :id LIMIT 1");
     $stmt->execute([':id' => $id]);
     return $stmt->fetch(PDO::FETCH_ASSOC) ?: null;
 }
@@ -154,8 +154,10 @@ if (empty($_SESSION['user_id'])) {
 /* --- Usuário está logado e é admin --- */
 require_admin($pdo);
 
-/* --- Processa ações admin: criar usuário (POST) e deletar (GET ?delete=) --- */
+/* --- Processa criar usuário e deletar --- */
 $admin_msg = '';
+$created_plain_map = []; // id => plain password (apenas para mostrar imediatamente)
+
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'create_user') {
     $new_user = trim($_POST['new_username'] ?? '');
     $new_pass = $_POST['new_password'] ?? '';
@@ -169,7 +171,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             $hash = password_hash($new_pass, PASSWORD_DEFAULT);
             $stmt = $pdo->prepare("INSERT INTO users (username, password, is_admin, created_at) VALUES (:u, :p, 0, :t)");
             $stmt->execute([':u' => $new_user, ':p' => $hash, ':t' => time()]);
+            $newId = (int)$pdo->lastInsertId();
             $admin_msg = "Usuário criado com sucesso.";
+            // guarda temporariamente para exibir o password (só nesta renderização)
+            $created_plain_map[$newId] = $new_pass;
         }
     }
 }
@@ -191,7 +196,7 @@ if (isset($_GET['delete'])) {
 }
 
 /* --- Lista usuários --- */
-$stmt = $pdo->query("SELECT id, username, is_admin, created_at FROM users ORDER BY id ASC");
+$stmt = $pdo->query("SELECT id, username, is_admin, created_at, last_command, last_timestamp FROM users ORDER BY id ASC");
 $users = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
 ?>
@@ -206,10 +211,16 @@ $users = $stmt->fetchAll(PDO::FETCH_ASSOC);
     body{ background:#07101a; color:#e6eef6; padding:28px; font-family:Inter,Arial; }
     .card { background:rgba(255,255,255,0.02); border-radius:12px; padding:16px; }
     .small-muted { color:#9aa6b2; font-size:0.9rem; }
+    .eye-btn { background:transparent; border:0; color:#9aa6b2; cursor:pointer; }
+    .plain-pass { font-family:monospace; background:rgba(0,0,0,0.25); padding:4px 8px; border-radius:6px; }
+    .status-dot { width:10px; height:10px; display:inline-block; border-radius:999px; margin-right:6px; vertical-align:middle; }
+    .status-start { background:#22c55e; }
+    .status-stop { background:#fb7185; }
+    .status-wait { background:#9aa6b2; }
   </style>
 </head>
 <body>
-  <div class="container" style="max-width:900px;">
+  <div class="container" style="max-width:980px;">
     <div class="d-flex justify-content-between align-items-center mb-3">
       <h3>Painel Admin — AuraBot</h3>
       <div>
@@ -225,14 +236,17 @@ $users = $stmt->fetchAll(PDO::FETCH_ASSOC);
       <form method="post" class="form-inline">
         <input type="hidden" name="action" value="create_user">
         <div class="form-row" style="width:100%;">
-          <div class="col-sm-5 mb-2">
+          <div class="col-sm-4 mb-2">
             <input name="new_username" class="form-control form-control-sm" placeholder="nome de usuário (ex: cliente01)" required>
           </div>
-          <div class="col-sm-5 mb-2">
+          <div class="col-sm-4 mb-2">
             <input name="new_password" class="form-control form-control-sm" placeholder="senha" required>
           </div>
           <div class="col-sm-2 mb-2">
             <button class="btn btn-success btn-block btn-sm">Criar</button>
+          </div>
+          <div class="col-sm-2 mb-2 text-right small-muted" style="display:flex;align-items:center;justify-content:flex-end;">
+            <span>As senhas não ficam gravadas em texto no banco.</span>
           </div>
         </div>
       </form>
@@ -247,20 +261,42 @@ $users = $stmt->fetchAll(PDO::FETCH_ASSOC);
             <tr class="small-muted">
               <th>#</th>
               <th>Usuário</th>
+              <th>Status</th>
               <th>Admin?</th>
               <th>Criado em</th>
               <th></th>
             </tr>
           </thead>
           <tbody>
-            <?php foreach ($users as $u): ?>
+            <?php foreach ($users as $u): 
+              $status = $u['last_command'] ?? null;
+              $ts = $u['last_timestamp'] ? date('Y-m-d H:i', (int)$u['last_timestamp']) : '-';
+            ?>
               <tr>
                 <td><?php echo (int)$u['id']; ?></td>
                 <td><?php echo e($u['username']); ?></td>
+                <td>
+                  <?php if ($status === 'start'): ?>
+                    <span class="status-dot status-start"></span> INICIADO (<?php echo e($ts); ?>)
+                  <?php elseif ($status === 'stop'): ?>
+                    <span class="status-dot status-stop"></span> PARADO (<?php echo e($ts); ?>)
+                  <?php else: ?>
+                    <span class="status-dot status-wait"></span> aguardando (<?php echo e($ts); ?>)
+                  <?php endif; ?>
+                </td>
                 <td><?php echo (int)$u['is_admin'] === 1 ? '<span class="badge badge-info">Sim</span>' : '<span class="badge badge-light">Não</span>'; ?></td>
                 <td><?php echo date('Y-m-d H:i', (int)$u['created_at']); ?></td>
                 <td style="text-align:right;">
                   <?php if ((int)$u['is_admin'] !== 1): ?>
+                    <?php if (isset($created_plain_map[$u['id']])): ?>
+                      <!-- mostra olho apenas para o usuário recém-criado (senha em plain disponível nesta renderização) -->
+                      <button class="eye-btn" data-plain="<?php echo e($created_plain_map[$u['id']]); ?>" onclick="togglePassword(this)" title="Mostrar senha">
+                        👁️
+                      </button>
+                    <?php else: ?>
+                      <!-- sem senha disponível para exibir -->
+                      <span class="small-muted">—</span>
+                    <?php endif; ?>
                     <a href="dados.php?delete=<?php echo (int)$u['id']; ?>" class="btn btn-sm btn-danger" onclick="return confirm('Deseja remover este usuário?')">Remover</a>
                   <?php else: ?>
                     <span class="small-muted">—</span>
@@ -274,5 +310,28 @@ $users = $stmt->fetchAll(PDO::FETCH_ASSOC);
     </div>
 
   </div>
+
+<script>
+function togglePassword(btn){
+  var plain = btn.getAttribute('data-plain') || '';
+  if(!plain) return;
+  if(btn._shown){
+    btn._shown = false;
+    btn.textContent = '👁️';
+    btn.title = 'Mostrar senha';
+    // opcional: mostrar um pequeno toast? aqui apenas alternamos atributo
+  } else {
+    btn._shown = true;
+    // substituir o botão pelo texto da senha temporariamente
+    var container = document.createElement('span');
+    container.className = 'plain-pass';
+    container.textContent = plain;
+    // inserimos após o botão e removemos o botão
+    btn.parentNode.insertBefore(container, btn);
+    btn.remove();
+  }
+}
+</script>
+
 </body>
 </html>
