@@ -1,9 +1,9 @@
 <?php
-// dados.php - painel admin (autônomo) atualizado
+// dados.php - painel admin (atualizado com client_id)
 // - cria data/ e data/users.db automaticamente
 // - admin padrão: admin / blackingbr
 // - permite criar/remover clientes (usuários não-admin)
-// - ao criar usuário, mostra um "olho" para revelar a senha criada (apenas imediatamente)
+// - gera client_id único ao criar usuário e mostra na listagem
 
 session_start();
 
@@ -23,7 +23,7 @@ try {
     exit;
 }
 
-/* --- Criar tabela users com colunas de status --- */
+/* --- Cria tabela users com colunas de status (se necessário) --- */
 $pdo->exec("CREATE TABLE IF NOT EXISTS users (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     username TEXT NOT NULL UNIQUE,
@@ -34,24 +34,36 @@ $pdo->exec("CREATE TABLE IF NOT EXISTS users (
     last_timestamp INTEGER DEFAULT NULL
 )");
 
+/* --- Adiciona client_id se não existir (compatibilidade com DB antigo) --- */
+$cols = $pdo->query("PRAGMA table_info(users)")->fetchAll(PDO::FETCH_ASSOC);
+$has_client_id = false;
+foreach ($cols as $c) {
+    if (isset($c['name']) && $c['name'] === 'client_id') { $has_client_id = true; break; }
+}
+if (!$has_client_id) {
+    // adicionar coluna (SQLite permite)
+    $pdo->exec("ALTER TABLE users ADD COLUMN client_id TEXT");
+}
+
 /* --- Garante admin padrão --- */
 $stmt = $pdo->prepare("SELECT COUNT(*) FROM users WHERE username = :u");
 $stmt->execute([':u' => 'admin']);
 if ((int)$stmt->fetchColumn() === 0) {
     $hash = password_hash('blackingbr', PASSWORD_DEFAULT);
-    $stmt = $pdo->prepare("INSERT INTO users (username, password, is_admin, created_at) VALUES (:u, :p, 1, :t)");
-    $stmt->execute([':u' => 'admin', ':p' => $hash, ':t' => time()]);
+    $stmt = $pdo->prepare("INSERT INTO users (username, password, is_admin, created_at, client_id) VALUES (:u, :p, 1, :t, :cid)");
+    $stmt->execute([':u' => 'admin', ':p' => $hash, ':t' => time(), ':cid' => bin2hex(random_bytes(8))]);
 }
 
 /* --- Helpers --- */
 function e($s){ return htmlspecialchars($s ?? '', ENT_QUOTES, 'UTF-8'); }
+
 function find_user_by_username($pdo, $username) {
-    $stmt = $pdo->prepare("SELECT id, username, password, is_admin, created_at, last_command, last_timestamp FROM users WHERE username = :u LIMIT 1");
+    $stmt = $pdo->prepare("SELECT id, username, password, is_admin, created_at, last_command, last_timestamp, client_id FROM users WHERE username = :u LIMIT 1");
     $stmt->execute([':u' => $username]);
     return $stmt->fetch(PDO::FETCH_ASSOC) ?: null;
 }
 function find_user_by_id($pdo, $id) {
-    $stmt = $pdo->prepare("SELECT id, username, password, is_admin, created_at, last_command, last_timestamp FROM users WHERE id = :id LIMIT 1");
+    $stmt = $pdo->prepare("SELECT id, username, password, is_admin, created_at, last_command, last_timestamp, client_id FROM users WHERE id = :id LIMIT 1");
     $stmt->execute([':id' => $id]);
     return $stmt->fetch(PDO::FETCH_ASSOC) ?: null;
 }
@@ -79,6 +91,17 @@ function require_admin($pdo) {
         echo "Acesso negado. Você precisa ser admin.";
         exit;
     }
+}
+function generate_unique_client_id($pdo) {
+    // gera até encontrar único
+    for ($i=0;$i<10;$i++){
+        $cid = bin2hex(random_bytes(8)); // 16 hex chars
+        $stmt = $pdo->prepare("SELECT COUNT(*) FROM users WHERE client_id = :cid");
+        $stmt->execute([':cid'=>$cid]);
+        if ((int)$stmt->fetchColumn() === 0) return $cid;
+    }
+    // fallback
+    return uniqid('cid_', true);
 }
 
 /* --- Logout via GET ?logout=1 --- */
@@ -156,7 +179,7 @@ require_admin($pdo);
 
 /* --- Processa criar usuário e deletar --- */
 $admin_msg = '';
-$created_plain_map = []; // id => plain password (apenas para mostrar imediatamente)
+$created_plain_map = []; // id => ['pass'=>..., 'client_id'=>...]
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'create_user') {
     $new_user = trim($_POST['new_username'] ?? '');
@@ -169,12 +192,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             $admin_msg = "Usuário já existe.";
         } else {
             $hash = password_hash($new_pass, PASSWORD_DEFAULT);
-            $stmt = $pdo->prepare("INSERT INTO users (username, password, is_admin, created_at) VALUES (:u, :p, 0, :t)");
-            $stmt->execute([':u' => $new_user, ':p' => $hash, ':t' => time()]);
+            $cid = generate_unique_client_id($pdo);
+            $stmt = $pdo->prepare("INSERT INTO users (username, password, is_admin, created_at, client_id) VALUES (:u, :p, 0, :t, :cid)");
+            $stmt->execute([':u' => $new_user, ':p' => $hash, ':t' => time(), ':cid' => $cid]);
             $newId = (int)$pdo->lastInsertId();
             $admin_msg = "Usuário criado com sucesso.";
-            // guarda temporariamente para exibir o password (só nesta renderização)
-            $created_plain_map[$newId] = $new_pass;
+            // guarda temporariamente para exibir a senha e client_id (apenas nesta renderização)
+            $created_plain_map[$newId] = ['pass' => $new_pass, 'client_id' => $cid, 'username' => $new_user];
         }
     }
 }
@@ -196,7 +220,7 @@ if (isset($_GET['delete'])) {
 }
 
 /* --- Lista usuários --- */
-$stmt = $pdo->query("SELECT id, username, is_admin, created_at, last_command, last_timestamp FROM users ORDER BY id ASC");
+$stmt = $pdo->query("SELECT id, username, is_admin, created_at, last_command, last_timestamp, client_id FROM users ORDER BY id ASC");
 $users = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
 ?>
@@ -211,12 +235,14 @@ $users = $stmt->fetchAll(PDO::FETCH_ASSOC);
     body{ background:#07101a; color:#e6eef6; padding:28px; font-family:Inter,Arial; }
     .card { background:rgba(255,255,255,0.02); border-radius:12px; padding:16px; }
     .small-muted { color:#9aa6b2; font-size:0.9rem; }
-    .eye-btn { background:transparent; border:0; color:#9aa6b2; cursor:pointer; }
-    .plain-pass { font-family:monospace; background:rgba(0,0,0,0.25); padding:4px 8px; border-radius:6px; }
+    .eye-btn { background:transparent; border:0; color:#9aa6b2; cursor:pointer; font-size:16px; margin-right:8px; }
+    .plain-pass { font-family:monospace; background:rgba(0,0,0,0.25); padding:4px 8px; border-radius:6px; margin-left:8px; color:#fff; }
     .status-dot { width:10px; height:10px; display:inline-block; border-radius:999px; margin-right:6px; vertical-align:middle; }
     .status-start { background:#22c55e; }
     .status-stop { background:#fb7185; }
     .status-wait { background:#9aa6b2; }
+    .cid-chip { font-family:monospace; background:rgba(255,255,255,0.03); padding:4px 8px; border-radius:8px; color:#e6eef6; margin-right:6px; display:inline-block; }
+    .copy-btn { background:transparent; border:0; color:#9aa6b2; cursor:pointer; }
   </style>
 </head>
 <body>
@@ -261,6 +287,7 @@ $users = $stmt->fetchAll(PDO::FETCH_ASSOC);
             <tr class="small-muted">
               <th>#</th>
               <th>Usuário</th>
+              <th>Client ID</th>
               <th>Status</th>
               <th>Admin?</th>
               <th>Criado em</th>
@@ -268,13 +295,21 @@ $users = $stmt->fetchAll(PDO::FETCH_ASSOC);
             </tr>
           </thead>
           <tbody>
-            <?php foreach ($users as $u): 
+            <?php foreach ($users as $u):
               $status = $u['last_command'] ?? null;
               $ts = $u['last_timestamp'] ? date('Y-m-d H:i', (int)$u['last_timestamp']) : '-';
             ?>
               <tr>
                 <td><?php echo (int)$u['id']; ?></td>
                 <td><?php echo e($u['username']); ?></td>
+                <td>
+                  <?php if (!empty($u['client_id'])): ?>
+                    <span class="cid-chip" id="cid-<?php echo (int)$u['id']; ?>"><?php echo e($u['client_id']); ?></span>
+                    <button class="copy-btn" onclick="copyCid('<?php echo e($u['client_id']); ?>')" title="Copiar client id">📋</button>
+                  <?php else: ?>
+                    <span class="small-muted">—</span>
+                  <?php endif; ?>
+                </td>
                 <td>
                   <?php if ($status === 'start'): ?>
                     <span class="status-dot status-start"></span> INICIADO (<?php echo e($ts); ?>)
@@ -290,11 +325,8 @@ $users = $stmt->fetchAll(PDO::FETCH_ASSOC);
                   <?php if ((int)$u['is_admin'] !== 1): ?>
                     <?php if (isset($created_plain_map[$u['id']])): ?>
                       <!-- mostra olho apenas para o usuário recém-criado (senha em plain disponível nesta renderização) -->
-                      <button class="eye-btn" data-plain="<?php echo e($created_plain_map[$u['id']]); ?>" onclick="togglePassword(this)" title="Mostrar senha">
-                        👁️
-                      </button>
+                      <button class="eye-btn" data-plain="<?php echo e($created_plain_map[$u['id']]['pass']); ?>" data-cid="<?php echo e($created_plain_map[$u['id']]['client_id']); ?>" data-user="<?php echo e($created_plain_map[$u['id']]['username']); ?>" onclick="reveal(this)" title="Mostrar usuário/senha">👁️</button>
                     <?php else: ?>
-                      <!-- sem senha disponível para exibir -->
                       <span class="small-muted">—</span>
                     <?php endif; ?>
                     <a href="dados.php?delete=<?php echo (int)$u['id']; ?>" class="btn btn-sm btn-danger" onclick="return confirm('Deseja remover este usuário?')">Remover</a>
@@ -312,24 +344,39 @@ $users = $stmt->fetchAll(PDO::FETCH_ASSOC);
   </div>
 
 <script>
-function togglePassword(btn){
-  var plain = btn.getAttribute('data-plain') || '';
-  if(!plain) return;
-  if(btn._shown){
-    btn._shown = false;
-    btn.textContent = '👁️';
-    btn.title = 'Mostrar senha';
-    // opcional: mostrar um pequeno toast? aqui apenas alternamos atributo
-  } else {
-    btn._shown = true;
-    // substituir o botão pelo texto da senha temporariamente
-    var container = document.createElement('span');
-    container.className = 'plain-pass';
-    container.textContent = plain;
-    // inserimos após o botão e removemos o botão
-    btn.parentNode.insertBefore(container, btn);
-    btn.remove();
+function toggleElText(el, txt){
+  if(!el) return;
+  el.textContent = txt;
+}
+function copyCid(cid){
+  if(!navigator.clipboard) {
+    alert('Seu navegador não suporta copiar por script. Selecione e copie manualmente.');
+    return;
   }
+  navigator.clipboard.writeText(cid).then(function(){
+    alert('client_id copiado: ' + cid);
+  }, function(){
+    alert('Falha ao copiar client_id.');
+  });
+}
+function reveal(btn){
+  var plain = btn.getAttribute('data-plain') || '';
+  var cid = btn.getAttribute('data-cid') || '';
+  var user = btn.getAttribute('data-user') || '';
+  if(!plain) return;
+  // cria um pequeno painel mostrando usuário, senha e client_id (se houver)
+  var panel = document.createElement('div');
+  panel.style.background = 'rgba(0,0,0,0.4)';
+  panel.style.padding = '10px';
+  panel.style.borderRadius = '8px';
+  panel.style.display = 'inline-block';
+  panel.style.marginLeft = '8px';
+  panel.style.color = '#fff';
+  panel.style.fontFamily = 'monospace';
+  panel.innerHTML = '<strong>Usuário:</strong> ' + user + '<br><strong>Senha:</strong> ' + plain + (cid ? '<br><strong>Client ID:</strong> ' + cid : '');
+  // insere antes do botão e remove o botão
+  btn.parentNode.insertBefore(panel, btn);
+  btn.remove();
 }
 </script>
 
