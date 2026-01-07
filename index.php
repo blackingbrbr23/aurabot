@@ -1,10 +1,11 @@
 <?php
-// index.php - login e painel AuraBot (atualizado para campo de mensagem com emoji)
+// index.php - login e painel AuraBot (atualizado com client_id persistente)
 // - usa data/users.db (cria se necessário)
 // - persiste last_command/last_timestamp no DB por usuário
 // - gera client_id ao primeiro login caso ainda não exista
 // - exibe client_id no lado direito (permanente até admin remover)
 
+/* --- sessão e DB --- */
 session_start();
 
 $DATA_DIR = __DIR__ . DIRECTORY_SEPARATOR . "data";
@@ -97,7 +98,7 @@ if (isset($_GET['action']) && $_GET['action'] === 'get_status') {
     }
     echo json_encode([
         'success' => true,
-        'message' => $user['last_command'] ?? null,
+        'command' => $user['last_command'] ?? null,
         'timestamp'=> $user['last_timestamp'] ? (int)$user['last_timestamp'] : null
     ], JSON_UNESCAPED_UNICODE);
     exit;
@@ -111,32 +112,19 @@ if (isset($_GET['action']) && $_GET['action'] === 'send_command' && $_SERVER['RE
     }
     $body = file_get_contents('php://input');
     $json = @json_decode($body, true);
-    if (!is_array($json)) {
+    if (!is_array($json) || !isset($json['command'])) {
         echo json_encode(['success'=>false,'error'=>'payload inválido'], JSON_UNESCAPED_UNICODE);
         exit;
     }
-
-    // Aceita tanto "message" quanto retro-compatibilidade "command"
-    $message = null;
-    if (isset($json['message'])) $message = trim((string)$json['message']);
-    elseif (isset($json['command'])) $message = trim((string)$json['command']);
-
-    if ($message === null || $message === '') {
-        echo json_encode(['success'=>false,'error'=>'mensagem vazia'], JSON_UNESCAPED_UNICODE);
+    $command = strtolower(trim($json['command']));
+    if (!in_array($command, ['start','stop'], true)) {
+        echo json_encode(['success'=>false,'error'=>'command inválido (start|stop)'], JSON_UNESCAPED_UNICODE);
         exit;
     }
-
-    // Limite razoável para evitar abusos
-    if (mb_strlen($message, 'UTF-8') > 4000) {
-        echo json_encode(['success'=>false,'error'=>'mensagem muito longa'], JSON_UNESCAPED_UNICODE);
-        exit;
-    }
-
     $ts = time();
-    $stmt = $pdo->prepare("UPDATE users SET last_command = :msg, last_timestamp = :ts WHERE id = :id");
-    $stmt->execute([':msg' => $message, ':ts' => $ts, ':id' => $_SESSION['user_id']]);
-
-    echo json_encode(['success'=>true,'message'=>$message,'timestamp'=>$ts], JSON_UNESCAPED_UNICODE);
+    $stmt = $pdo->prepare("UPDATE users SET last_command = :cmd, last_timestamp = :ts WHERE id = :id");
+    $stmt->execute([':cmd' => $command, ':ts' => $ts, ':id' => $_SESSION['user_id']]);
+    echo json_encode(['success'=>true,'command'=>$command,'timestamp'=>$ts], JSON_UNESCAPED_UNICODE);
     exit;
 }
 
@@ -250,14 +238,11 @@ if (!empty($_SESSION['user_id'])) {
     .user-bar { display:flex; justify-content:space-between; align-items:center; gap:12px; margin-bottom:12px; }
     .chip { padding:6px 10px; border-radius:999px; background: rgba(255,255,255,0.03); border:1px solid rgba(255,255,255,0.02); }
     .cid-chip { font-family:monospace; background:rgba(255,255,255,0.02); padding:6px 10px; border-radius:8px; color:#e6eef6; margin-left:8px; }
+    .row-buttons { margin-top:10px; }
+    .chip-start { background: rgba(37, 211, 102, 0.12); color: #22c55e; border: 1px solid rgba(34,197,94,0.08); padding:7px 12px;border-radius:999px;}
+    .chip-stop  { background: rgba(239,68,68,0.08); color: #fb7185; border: 1px solid rgba(239,68,68,0.08); padding:7px 12px;border-radius:999px;}
     .chip-wait  { background: rgba(255,255,255,0.02); color: var(--muted); border: 1px solid rgba(255,255,255,0.02); padding:7px 12px;border-radius:999px;}
     .copy-btn { background:transparent; border:0; color:#9aa6b2; cursor:pointer; margin-left:6px; }
-    .message-box { background: var(--glass); border-radius:10px; padding:14px; margin-top:18px; }
-    .emoji-btn { background:transparent; border:0; font-size:20px; cursor:pointer; margin-right:6px; }
-    .emoji-panel { display:flex; gap:6px; flex-wrap:wrap; margin-top:8px; }
-    .emoji-pill { background: rgba(255,255,255,0.03); border:1px solid rgba(255,255,255,0.02); padding:6px 8px; border-radius:8px; cursor:pointer; }
-    .send-btn { display:flex; align-items:center; justify-content:center; }
-    .small-muted { color:var(--muted); font-size:0.85rem; }
   </style>
 </head>
 <body>
@@ -314,48 +299,21 @@ if (!empty($_SESSION['user_id'])) {
         <h1 class="title">AuraBot</h1>
       </div>
 
-      <!-- Campo de mensagem e emojis -->
-      <div class="message-box">
-        <label for="messageInput"><strong>Mensagem para o cliente</strong></label>
-        <textarea id="messageInput" class="form-control" rows="3" placeholder="Escreva algo..."></textarea>
-        <div style="display:flex; justify-content:space-between; align-items:center; margin-top:8px; gap:12px;">
-          <div>
-            <button id="toggleEmojiPanel" class="emoji-btn" title="Abrir painel de emojis">😀</button>
-            <span class="small-muted">Clique em um emoji para inserir</span>
-          </div>
-          <div style="display:flex; gap:8px;">
-            <button id="sendMessageBtn" class="btn btn-primary send-btn">Enviar</button>
-            <button id="clearMessageBtn" class="btn btn-outline-light">Limpar</button>
-          </div>
+      <div class="row row-buttons">
+        <div class="col-12 col-md-6 mb-2">
+          <button id="btnStart" class="btn btn-success btn-lg btn-block">INICIAR</button>
         </div>
-
-        <div id="emojiPanel" class="emoji-panel" style="display:none; margin-top:10px;">
-          <!-- emojis básicos -->
-          <button class="emoji-pill" data-emoji="😊">😊</button>
-          <button class="emoji-pill" data-emoji="😂">😂</button>
-          <button class="emoji-pill" data-emoji="😍">😍</button>
-          <button class="emoji-pill" data-emoji="👍">👍</button>
-          <button class="emoji-pill" data-emoji="👎">👎</button>
-          <button class="emoji-pill" data-emoji="🎉">🎉</button>
-          <button class="emoji-pill" data-emoji="🔥">🔥</button>
-          <button class="emoji-pill" data-emoji="🤖">🤖</button>
-          <button class="emoji-pill" data-emoji="💬">💬</button>
-          <button class="emoji-pill" data-emoji="⚠️">⚠️</button>
+        <div class="col-12 col-md-6 mb-2">
+          <button id="btnStop" class="btn btn-danger btn-lg btn-block">STOP</button>
         </div>
       </div>
 
-      <div class="status-box mt-3" style="background:var(--glass); border-radius:10px; padding:12px; margin-top:18px;">
-        <strong style="opacity:0.92;">Última mensagem:</strong>
-        <div id="status" style="margin-top:8px;">
-          <span class="chip-wait">aguardando...</span>
-        </div>
-        <div id="statusTime" class="small-muted" style="margin-top:8px;"></div>
+      <div class="status-box mt-3" style="background:var(--glass); border-radius:10px; padding:12px; margin-top:18px; display:flex; align-items:center; justify-content:center; gap:12px;">
+        <strong style="opacity:0.92;">Status:</strong>
+        <div id="status" style="margin-left:8px;">aguardando...</div>
       </div>
 
       <script>
-      // Funções utilitárias
-      function e(s){ return String(s || ''); }
-
       // copia client id para clipboard
       function copyClientId(){
         var el = document.getElementById('clientIdDisplay');
@@ -386,41 +344,38 @@ if (!empty($_SESSION['user_id'])) {
         return id;
       }
 
-      // UI de status
-      function setUI(message, ts){
+      function setUI(command){
         const statusEl = document.getElementById("status");
-        const timeEl = document.getElementById("statusTime");
+        const btnStart = document.getElementById("btnStart");
+        const btnStop  = document.getElementById("btnStop");
 
-        if(!message){
-          statusEl.innerHTML = '<span class="chip-wait">aguardando...</span>';
-          timeEl.textContent = '';
-          return;
-        }
+        btnStart.classList.remove("active");
+        btnStop.classList.remove("active");
 
-        // inserir mensagem com segurança (textContent)
-        statusEl.textContent = message;
-
-        if(ts){
-          const d = new Date(ts * 1000);
-          timeEl.textContent = 'Enviado em ' + d.toLocaleString();
+        if(command === "start"){
+          statusEl.innerHTML = '<span class="chip-start">INICIADO</span>';
+          btnStart.classList.add("active");
+        } else if(command === "stop"){
+          statusEl.innerHTML = '<span class="chip-stop">PARADO</span>';
+          btnStop.classList.add("active");
         } else {
-          timeEl.textContent = '';
+          statusEl.innerHTML = '<span class="chip-wait">aguardando...</span>';
         }
       }
 
-      // envia mensagem ao servidor (por usuário) — endpoint interno index.php?action=send_command
-      async function updateServerMessage(message){
+      // envia comando ao servidor (por usuário) — endpoint interno index.php?action=send_command
+      async function updateServerCommand(command){
         try {
           const r = await fetch('index.php?action=send_command', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json; charset=utf-8' },
-            body: JSON.stringify({ message: message })
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ command: command })
           });
           if(!r.ok) return null;
           const j = await r.json();
           return j;
         } catch(e){
-          console.warn('Falha ao atualizar mensagem no servidor:', e);
+          console.warn('Falha ao atualizar status no servidor:', e);
           return null;
         }
       }
@@ -440,85 +395,49 @@ if (!empty($_SESSION['user_id'])) {
       }
 
       // envia também para api.php (se quiser manter o armazenamento por clientId)
-      async function sendToApiPhp(clientId, message){
+      async function sendToApiPhp(clientId, command){
         try {
           await fetch(API_URL, {
             method: "POST",
-            headers: { "Content-Type": "application/json; charset=utf-8" },
-            body: JSON.stringify({ clientId: clientId, command: message })
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ clientId: clientId, command: command })
           });
         } catch(e){
           // não crítico
         }
       }
 
-      async function sendMessage(){
-        const input = document.getElementById('messageInput');
-        const txt = (input.value || '').trim();
-        if(!txt){
-          alert('Escreva uma mensagem antes de enviar.');
-          return;
-        }
+      async function send(cmd){
+        const clientId = getClientId();
 
         // atualiza servidor (persistência por usuário) — principal
-        const srv = await updateServerMessage(txt);
+        const srv = await updateServerCommand(cmd);
         if (srv && srv.success) {
-          setUI(srv.message, srv.timestamp);
+          // atualizou com sucesso no servidor
+          setUI(cmd);
         } else {
           // se falhar, ao menos atualiza a UI localmente
-          setUI(txt, Math.floor(Date.now()/1000));
+          setUI(cmd);
         }
 
         // atualiza também a API por clientId (compatibilidade)
-        sendToApiPhp(getClientId(), txt);
+        sendToApiPhp(clientId, cmd);
 
         // salva localmente (opcional)
-        localStorage.setItem(STORAGE_KEY_ACTION, JSON.stringify({ message: txt, timestamp: Date.now() }));
-
-        // limpar campo opcionalmente
-        // input.value = '';
+        localStorage.setItem(STORAGE_KEY_ACTION, JSON.stringify({ command: cmd, timestamp: Date.now() }));
       }
 
       (async function init(){
         // tenta obter o status do servidor para este usuário
         const server = await fetchServerStatus();
-        if (server && (server.message !== undefined)) {
-          setUI(server.message, server.timestamp);
+        if (server && server.command) {
+          setUI(server.command);
         } else {
           setUI(null);
         }
 
-        // botões
-        document.getElementById('sendMessageBtn').onclick = (e) => { e.preventDefault(); sendMessage(); };
-        document.getElementById('clearMessageBtn').onclick = (e) => { e.preventDefault(); document.getElementById('messageInput').value = ''; };
-
-        // emoji panel toggle
-        const toggleBtn = document.getElementById('toggleEmojiPanel');
-        const emojiPanel = document.getElementById('emojiPanel');
-        toggleBtn.onclick = function(e){
-          e.preventDefault();
-          emojiPanel.style.display = (emojiPanel.style.display === 'none' || emojiPanel.style.display === '') ? 'flex' : 'none';
-        };
-
-        // emoji insertion
-        const emojiButtons = document.querySelectorAll('.emoji-pill');
-        emojiButtons.forEach(function(b){
-          b.addEventListener('click', function(){
-            const em = b.getAttribute('data-emoji') || '';
-            const input = document.getElementById('messageInput');
-            // inserir no cursor / fim do texto
-            const start = input.selectionStart || input.value.length;
-            const end = input.selectionEnd || start;
-            const before = input.value.substring(0, start);
-            const after = input.value.substring(end);
-            input.value = before + em + after;
-            // posiciona o cursor após o emoji
-            const pos = before.length + em.length;
-            input.setSelectionRange(pos, pos);
-            input.focus();
-          });
-        });
-
+        document.getElementById("btnStart").onclick = ()=> send("start");
+        document.getElementById("btnStop").onclick  = ()=> send("stop");
       })();
       </script>
 
